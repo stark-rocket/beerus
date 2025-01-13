@@ -1,7 +1,7 @@
-use eyre::{Context, Result};
+use eyre::Result;
 
-use crate::config::{check_chain_id, Config};
-use crate::eth::{EthereumClient, Helios};
+use crate::config::{get_gateway_url, Config};
+use crate::feeder::GatewayClient;
 use crate::gen::client::Client as StarknetClient;
 use crate::gen::{gen, Felt, FunctionCall, Rpc};
 
@@ -108,7 +108,7 @@ pub struct Client<
         + 'static,
 > {
     starknet: StarknetClient<T>,
-    ethereum: EthereumClient,
+    gateway: GatewayClient,
     http: T,
 }
 
@@ -125,14 +125,13 @@ impl<
         if rpc_spec_version != RPC_SPEC_VERSION {
             eyre::bail!("RPC spec version mismatch: expected {RPC_SPEC_VERSION} but got {rpc_spec_version}");
         }
-        let network =
-            check_chain_id(&config.ethereum_rpc, &config.starknet_rpc).await?;
-        let ethereum = EthereumClient::new(config, network).await?;
-        Ok(Self { starknet, ethereum, http })
-    }
-
-    pub fn ethereum(&self) -> &Helios {
-        &self.ethereum.helios
+        let url = if let Some(url) = config.gateway_url.as_ref() {
+            url.as_str()
+        } else {
+            get_gateway_url(&config.starknet_rpc).await?
+        };
+        let gateway = GatewayClient::new(url)?;
+        Ok(Self { starknet, gateway, http })
     }
 
     pub fn starknet(&self) -> &StarknetClient<T> {
@@ -159,17 +158,7 @@ impl<
     }
 
     pub async fn get_state(&self) -> Result<State> {
-        let (block_number, block_hash, state_root) = self
-            .ethereum
-            .starknet_state()
-            .await
-            .context("beerus: get starknet state")?;
-
-        Ok(State {
-            block_number,
-            block_hash: as_felt(block_hash.as_bytes())?,
-            root: as_felt(state_root.as_bytes())?,
-        })
+        self.gateway.get_state().await
     }
 }
 
